@@ -28,6 +28,10 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # Git on Windows does not record the executable bit, so restore it here.
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
       - name: Resolve tag
         id: tag
         run: |
