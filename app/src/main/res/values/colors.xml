@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="blus_green">#FF007A45</color>
+    <color name="blus_green_dark">#FF005432</color>
+    <color name="blus_background">#FF10151A</color>
+    <color name="blus_surface">#FF1A2128</color>
+    <color name="blus_on_surface">#FFE6EDF3</color>
+    <color name="ic_launcher_background">#FF007A45</color>
+</resources>

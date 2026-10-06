@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Blus</string>
+
+    <string name="tab_map">Carte</string>
+    <string name="tab_nearby">À proximité</string>
+    <string name="tab_traffic">Trafic</string>
+    <string name="tab_settings">Réglages</string>
+
+    <string name="loading_network">Téléchargement du réseau Naolib…</string>
+    <string name="loading_network_hint">Données officielles Nantes Métropole (GTFS), ~27 Mo. Une seule fois.</string>
+    <string name="importing_network">Construction de la base locale…</string>
+    <string name="retry">Réessayer</string>
+    <string name="cancel">Annuler</string>
+    <string name="close">Fermer</string>
+    <string name="download">Télécharger</string>
+    <string name="install">Installer</string>
+
+    <string name="search_hint">Rechercher un arrêt</string>
+    <string name="no_departures">Aucun passage annoncé</string>
+    <string name="scheduled">théorique</string>
+    <string name="live">temps réel</string>
+
+    <string name="update_available">Mise à jour disponible</string>
+    <string name="update_up_to_date">Blus est à jour</string>
+    <string name="check_update">Rechercher une mise à jour</string>
+</resources>

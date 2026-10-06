@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.Blus" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@color/blus_background</item>
+        <item name="android:navigationBarColor">@color/blus_background</item>
+        <item name="android:windowBackground">@color/blus_background</item>
+        <item name="colorPrimary">@color/blus_green</item>
+        <item name="colorAccent">@color/blus_green</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+    </style>
+</resources>
