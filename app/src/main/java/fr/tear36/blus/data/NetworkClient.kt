@@ -99,6 +99,6 @@ class NetworkClient(private val cacheDir: File) {
 
 object BuildInfo {
     const val VERSION_NAME = "1.0.0"
-    const val REPO = "tear36/blus"
+    const val REPO = "tear360/blus"
     const val RELEASES_API = "https://api.github.com/repos/$REPO/releases/latest"
 }
