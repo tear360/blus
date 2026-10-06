@@ -21,10 +21,25 @@ val signingProps = Properties().apply {
 fun signingValue(env: String, key: String): String? =
     System.getenv(env) ?: signingProps.getProperty(key)?.takeIf { it.isNotBlank() }
 
-val releaseKeystore = signingValue("BLUS_KEYSTORE", "storeFile")
+val releaseKeystorePath = signingValue("BLUS_KEYSTORE", "storeFile")
 val releaseStorePassword = signingValue("BLUS_KEYSTORE_PASSWORD", "storePassword")
 val releaseKeyAlias = signingValue("BLUS_KEY_ALIAS", "keyAlias")
 val releaseKeyPassword = signingValue("BLUS_KEY_PASSWORD", "keyPassword")
+
+/**
+ * Keystore paths come from env vars / CI, which are usually relative to the repository
+ * root rather than to the :app module, so try both.
+ */
+val releaseKeystoreFile: java.io.File? = releaseKeystorePath?.let { path ->
+    listOf(file(path), rootProject.file(path))
+        .firstOrNull { it.exists() }
+        ?: file(path)
+}
+
+val hasReleaseSigning = releaseKeystoreFile != null &&
+    releaseKeystoreFile.exists() &&
+    releaseStorePassword != null &&
+    releaseKeyAlias != null
 
 android {
     namespace = "fr.tear36.blus"
@@ -40,9 +55,9 @@ android {
     }
 
     signingConfigs {
-        if (releaseKeystore != null) {
+        if (hasReleaseSigning) {
             create("release") {
-                storeFile = file(releaseKeystore)
+                storeFile = releaseKeystoreFile
                 storePassword = releaseStorePassword
                 keyAlias = releaseKeyAlias
                 keyPassword = releaseKeyPassword
@@ -59,7 +74,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            if (releaseKeystore != null && file(releaseKeystore!!).exists()) {
+            if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
