@@ -21,13 +21,16 @@ val signingProps = Properties().apply {
 fun signingValue(env: String, key: String): String? =
     System.getenv(env) ?: signingProps.getProperty(key)?.takeIf { it.isNotBlank() }
 
-val releaseKeystorePath = signingValue("BLUS_KEYSTORE", "storeFile")
+// java.util.Properties treats a backslash as an escape, so a Windows path written as
+// `C:\...` comes back mangled. Normalise it; passwords are left untouched.
+val releaseKeystorePath =
+    signingValue("BLUS_KEYSTORE", "storeFile")?.replace('\\', '/')
 val releaseStorePassword = signingValue("BLUS_KEYSTORE_PASSWORD", "storePassword")
 val releaseKeyAlias = signingValue("BLUS_KEY_ALIAS", "keyAlias")
 val releaseKeyPassword = signingValue("BLUS_KEY_PASSWORD", "keyPassword")
 
 /** Fallback version for local builds; CI overrides it with the tag it is releasing. */
-val defaultVersionName = "1.0.1"
+val defaultVersionName = "1.0.2"
 
 /**
  * Keystore paths come from env vars / CI, which are usually relative to the repository
@@ -43,6 +46,18 @@ val hasReleaseSigning = releaseKeystoreFile != null &&
     releaseKeystoreFile.exists() &&
     releaseStorePassword != null &&
     releaseKeyAlias != null
+
+// An unsigned release APK cannot be installed, so never let that pass unnoticed locally.
+// GitHub Actions keeps its historical lenient behaviour (it warns instead of failing).
+val releaseRequested = gradle.startParameter.taskNames.any {
+    it.contains("Release", ignoreCase = true) || it == "build" || it == "assemble"
+}
+val onCi = System.getenv("GITHUB_ACTIONS") == "true"
+if (releaseRequested && !hasReleaseSigning) {
+    val message =
+        "APK release non signe : variables BLUS_KEYSTORE* ou signing.properties manquantes a la racine du depot."
+    if (onCi) logger.warn(message) else throw GradleException(message)
+}
 
 android {
     namespace = "fr.tear36.blus"

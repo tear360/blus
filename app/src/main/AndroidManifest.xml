@@ -46,7 +46,7 @@
         </provider>
 
         <receiver
-            android:name="update.ApkInstaller"
+            android:name="fr.tear36.blus.update.ApkInstaller"
             android:exported="true">
             <intent-filter>
                 <action android:name="fr.tear36.blus.INSTALL_APK" />
