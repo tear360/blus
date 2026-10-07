@@ -149,7 +149,7 @@ private fun UpdateCard(context: Context, state: UpdateState, vm: BlusViewModel) 
                 Column(Modifier.weight(1f)) {
                     Text("Version installée", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        text = BuildInfo.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")",
+                        text = BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -234,16 +234,32 @@ private fun UpdateCard(context: Context, state: UpdateState, vm: BlusViewModel) 
                     Spacer(Modifier.size(12.dp))
                     Button(
                         onClick = {
-                            runCatching {
-                                context.sendBroadcast(
-                                    ApkInstaller.intent(context, java.io.File(state.filePath)),
-                                )
-                            }.onFailure {
-                                Toast.makeText(context, "Installation impossible", Toast.LENGTH_LONG).show()
+                            val file = java.io.File(state.filePath)
+                            // Android 8+ requires a per-app "unknown sources" grant first.
+                            val settingsIntent = ApkInstaller.requestUnknownSourcesPermission(context)
+                            if (settingsIntent != null) {
+                                runCatching { context.startActivity(settingsIntent) }
+                                    .onFailure {
+                                        Toast.makeText(context, "Activez l'installation depuis cette source dans les réglages Android.", Toast.LENGTH_LONG).show()
+                                    }
+                            } else {
+                                runCatching {
+                                    context.sendBroadcast(ApkInstaller.intent(context, file))
+                                }.onFailure {
+                                    Toast.makeText(context, "Installation impossible", Toast.LENGTH_LONG).show()
+                                }
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Installer la mise à jour") }
+                    ) {
+                        Text(
+                            if (ApkInstaller.requestUnknownSourcesPermission(context) != null) {
+                                "Autoriser l'installation"
+                            } else {
+                                "Installer la mise à jour"
+                            }
+                        )
+                    }
                 }
 
                 is UpdateState.Error -> Column {

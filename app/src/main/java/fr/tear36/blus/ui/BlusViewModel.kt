@@ -1,4 +1,4 @@
-﻿package fr.tear36.blus.ui
+package fr.tear36.blus.ui
 
 import android.annotation.SuppressLint
 import android.app.Application
@@ -111,9 +111,9 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
                     .addOnSuccessListener { loc: Location? ->
                         if (loc != null) location.value = LatLon(loc.latitude, loc.longitude)
                     }
-                    .addOnFailureListener { /* permission refusÃ©e */ }
+                    .addOnFailureListener { /* permission refusée */ }
             } catch (e: SecurityException) {
-                lastError.value = "Autorisation de localisation refusÃ©e"
+                lastError.value = "Autorisation de localisation refusée"
             }
         }
     }
@@ -132,7 +132,7 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
         return withContext(Dispatchers.IO) { repo.database.stationsNear(p.lat, p.lon, 3000, 1).firstOrNull() }
     }
 
-    /** Commerce, centre de Nantes â€” used before the first location fix. */
+    /** Commerce, centre de Nantes : used before the first location fix. */
     suspend fun defaultStation(): Stop? = withContext(Dispatchers.IO) {
         repo.database.stationsNear(47.2145, -1.5560, 700, 1).firstOrNull()
     }
@@ -205,7 +205,7 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ---------- Mise Ã  jour ----------
+// ---------- Mise a jour ----------
 
     private fun shouldAutoCheckUpdate(): Boolean {
         val last = BlusApp.prefs(getApplication()).getLong(KEY_LAST_UPDATE_CHECK, 0L)
@@ -238,7 +238,7 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
             updateState.value = if (file != null) {
                 UpdateState.Ready(file.absolutePath, update.versionName)
             } else {
-                UpdateState.Error("tÃ©lÃ©chargement du APK impossible")
+                UpdateState.Error("téléchargement du APK impossible")
             }
         }
     }

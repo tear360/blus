@@ -52,27 +52,43 @@ object GtfsRt {
 
         fun readBytes(): Reader {
             val len = readVarint().toInt()
-            if (len <= 0) return Reader(buf, pos, pos)
-            val stop = minOf(pos + len, end)
-            return Reader(buf, pos, stop)
+            val start = pos
+            val stop = if (len <= 0) start else minOf(start + len, end)
+            // The sub-reader walks its own range, but this reader must resume *after*
+            // the nested message, otherwise every following field is misaligned.
+            pos = stop
+            return Reader(buf, start, stop)
         }
+
+        /** The bytes this reader still has to offer, taken before walking them. */
+        fun rawRemaining(): ByteArray = buf.copyOfRange(pos, end)
 
         fun skip(wire: Int) {
             when (wire) {
                 WIRE_VARINT -> readVarint()
                 WIRE_FIXED64 -> pos += 8
-                WIRE_LEN -> pos += readVarint().toInt()
+                // NB: read the length first. `pos += readVarint()` would capture the
+                // old value of `pos` before the read advances it.
+                WIRE_LEN -> {
+                    val n = readVarint().toInt()
+                    pos += n
+                }
                 WIRE_FIXED32 -> pos += 4
                 else -> pos = end
             }
         }
 
-        fun next(visitor: (Int, Int, Reader) -> Boolean): Boolean {
-            if (pos >= end) return false
-            val key = readVarint()
-            val field = (key ushr 3).toInt()
-            val wire = (key and 0x7L).toInt()
-            return visitor(field, wire, this)
+        /**
+         * Walks every remaining record in this reader, handing each one to [visitor].
+         * Iteration stops early when [visitor] returns false.
+         */
+        fun each(visitor: (Int, Int, Reader) -> Boolean) {
+            while (pos < end) {
+                val key = readVarint()
+                val field = (key ushr 3).toInt()
+                val wire = (key and 0x7L).toInt()
+                if (!visitor(field, wire, this)) return
+            }
         }
     }
 
@@ -139,19 +155,19 @@ object GtfsRt {
         val vehicles = ArrayList<RtVehiclePosition>(64)
         val alerts = ArrayList<RtAlert>(32)
 
-        root.next { field, wire, r ->
+        root.each { field, wire, r ->
             when {
                 field == 1 && wire == WIRE_LEN -> {
-                    r.readBytes().next { hf, hw, hr ->
-                        if (hf == 3 && hw == WIRE_VARINT) timestamp = hr.readVarint()
-                        else hr.skip(hw)
+                    r.readBytes().each { hf, hw, hr ->
+                        if (hf == 3 && hw == WIRE_VARINT) timestamp = hr.readVarint() else hr.skip(hw)
                         true
                     }
+                    true
                 }
                 field == 2 && wire == WIRE_LEN -> {
                     val sub = r.readBytes()
                     var id = ""
-                    sub.next { ef, ew, er ->
+                    sub.each { ef, ew, er ->
                         when {
                             ef == 1 && ew == WIRE_LEN -> { id = er.readString(); true }
                             ef == 3 && ew == WIRE_LEN -> { trips.add(parseTripUpdate(er.readBytes(), id)); true }
@@ -163,6 +179,7 @@ object GtfsRt {
                             else -> { er.skip(ew); true }
                         }
                     }
+                    true
                 }
                 else -> { r.skip(wire); true }
             }
@@ -179,7 +196,7 @@ object GtfsRt {
 
     private fun parseTripDesc(r: Reader): TripDesc {
         val t = TripDesc()
-        r.next { f, w, rr ->
+        r.each { f, w, rr ->
             when {
                 f == 1 && w == WIRE_LEN -> { t.tripId = rr.readString(); true }
                 f == 5 && w == WIRE_LEN -> { t.routeId = rr.readString(); true }
@@ -195,7 +212,7 @@ object GtfsRt {
 
     private fun parseEvent(r: Reader): Ev {
         val e = Ev()
-        r.next { f, w, rr ->
+        r.each { f, w, rr ->
             when {
                 f == 1 && w == WIRE_VARINT -> { e.delay = rr.readInt(); true }
                 f == 2 && w == WIRE_VARINT -> { e.time = rr.readVarint(); e.hasTime = true; true }
@@ -206,16 +223,18 @@ object GtfsRt {
     }
 
     private fun parseStopTimeUpdate(r: Reader): RtCall? {
+        // Field numbers follow transit_realtime.proto: 1 stop_sequence,
+        // 2 arrival, 3 departure, 4 stop_id, 5 schedule_relationship.
         var stopId: String? = null
         var seq = 0
         var arr = Ev()
         var dep = Ev()
-        r.next { f, w, rr ->
+        r.each { f, w, rr ->
             when {
                 f == 1 && w == WIRE_VARINT -> { seq = rr.readInt(); true }
-                f == 2 && w == WIRE_LEN -> { stopId = rr.readString(); true }
-                f == 3 && w == WIRE_LEN -> { arr = parseEvent(rr.readBytes()); true }
-                f == 4 && w == WIRE_LEN -> { dep = parseEvent(rr.readBytes()); true }
+                f == 2 && w == WIRE_LEN -> { arr = parseEvent(rr.readBytes()); true }
+                f == 3 && w == WIRE_LEN -> { dep = parseEvent(rr.readBytes()); true }
+                f == 4 && w == WIRE_LEN -> { stopId = rr.readString(); true }
                 else -> { rr.skip(w); true }
             }
         }
@@ -224,23 +243,25 @@ object GtfsRt {
             dep.hasTime -> dep.time
             else -> return null
         }
-        return RtCall(stopId, seq, arr.time, dep.time, dep.delay.takeIf { it != 0 } ?: arr.delay)
+        val delay = if (dep.hasTime) dep.delay else arr.delay
+        return RtCall(stopId, seq, arr.time, dep.time, delay)
     }
 
     private fun parseTripUpdate(r: Reader, entityId: String): RtTrip {
+        // Field numbers follow transit_realtime.proto: 1 trip, 2 stop_time_update (repeated),
+        // 3 vehicle, 4 timestamp, 5 delay, 6 schedule_relationship.
         var trip = TripDesc()
         var timestamp = 0L
         var delay = 0
         var rel = 0
         val calls = ArrayList<RtCall>(8)
-        r.next { f, w, rr ->
+        r.each { f, w, rr ->
             when {
                 f == 1 && w == WIRE_LEN -> { trip = parseTripDesc(rr.readBytes()); true }
-                f == 3 && w == WIRE_LEN -> { parseStopTimeUpdate(rr.readBytes())?.let { calls.add(it) }; true }
+                f == 2 && w == WIRE_LEN -> { parseStopTimeUpdate(rr.readBytes())?.let { calls.add(it) }; true }
                 f == 4 && w == WIRE_VARINT -> { timestamp = rr.readVarint(); true }
                 f == 5 && w == WIRE_VARINT -> { delay = rr.readInt(); true }
                 f == 6 && w == WIRE_VARINT -> { rel = rr.readInt(); true }
-                f == 7 && w == WIRE_LEN -> { if (trip.tripId.isEmpty()) trip.tripId = rr.readString(); else rr.skip(w); true }
                 else -> { rr.skip(w); true }
             }
         }
@@ -257,11 +278,11 @@ object GtfsRt {
         var status = 0
         var stopId: String? = null
         var timestamp = 0L
-        r.next { f, w, rr ->
+        r.each { f, w, rr ->
             when {
                 f == 1 && w == WIRE_LEN -> { trip = parseTripDesc(rr.readBytes()); true }
                 f == 2 && w == WIRE_LEN -> {
-                    rr.readBytes().next { pf, pw, pr ->
+                    rr.readBytes().each { pf, pw, pr ->
                         when {
                             pf == 1 && pw == WIRE_FIXED32 -> { lat = pr.readFloat().toDouble(); true }
                             pf == 2 && pw == WIRE_FIXED32 -> { lon = pr.readFloat().toDouble(); true }
@@ -292,15 +313,79 @@ object GtfsRt {
         )
     }
 
+    /**
+     * Reads a `TranslatedString`: `repeated Translation translation = 1`, where each
+     * `Translation` carries `string text = 1` and `string language = 2`.
+     *
+     * The Naolib producer labels every translation `unspecified`, so a French version is
+     * only preferred when it is actually tagged as such; otherwise the first entry wins,
+     * which is how the feed orders them.
+     */
     private fun parseTranslated(r: Reader): String {
-        var out = ""
-        r.next { f, w, rr ->
-            if (f == 1 && w == WIRE_LEN) { out = rr.readString(); true } else { rr.skip(w); true }
+        var first = ""
+        var french: String? = null
+        r.each { f, w, rr ->
+            if (f == 1 && w == WIRE_LEN) {
+                val sub = rr.readBytes()
+                val raw = sub.rawRemaining()
+                var text = ""
+                var language = ""
+                var sawText = false
+                sub.each { tf, tw, tr ->
+                    when {
+                        tf == 1 && tw == WIRE_LEN && !sawText -> { text = tr.readString(); sawText = true; true }
+                        tf == 2 && tw == WIRE_LEN -> { language = tr.readString(); true }
+                        else -> { tr.skip(tw); true }
+                    }
+                }
+                if (text.isEmpty()) text = String(raw, Charsets.UTF_8)
+                if (text.isNotBlank()) {
+                    if (first.isBlank()) first = text
+                    val lang = language.substringBefore('-').substringBefore('_')
+                    if (lang.equals("fr", true) && french == null) french = text
+                }
+            } else rr.skip(w)
+            true
         }
-        return out
+        return french ?: first
+    }
+
+    private val HTML_TAG = Regex("</?[a-zA-Z][^>]*>")
+    private val NUMERIC_ENTITY = Regex("&#(x?[0-9A-Fa-f]+);")
+
+    private val NAMED_ENTITIES = mapOf(
+        "amp" to "&", "lt" to "<", "gt" to ">", "quot" to "\"", "apos" to "'",
+        "nbsp" to " ", "shy" to "", "ndash" to "–", "mdash" to "—",
+        "agrave" to "à", "ccedil" to "ç", "egrave" to "è", "eacute" to "é",
+        "iacute" to "í", "ocirc" to "ô", "ugrave" to "ù", "ucirc" to "û",
+        "acirc" to "â", "icirc" to "î", "laquo" to "«", "raquo" to "»",
+        "deg" to "°",
+    )
+
+    /**
+     * Naolib packs HTML into the alert description (`<h4>…</h4>`), which would be shown
+     * verbatim by the UI. Strips the markup and decodes the entities it leaves behind.
+     */
+    internal fun String.toUserText(): String {
+        val unescaped = replace(HTML_TAG, " ").replace(NUMERIC_ENTITY) { m ->
+            val body = m.groupValues[1].removePrefix("x").removePrefix("X")
+            val code = if (m.groupValues[1].startsWith("x") || m.groupValues[1].startsWith("X")) {
+                body.toLongOrNull(16)
+            } else {
+                body.toLongOrNull()
+            }
+            if (code != null && code in 32L..0x10FFFFL) String(Character.toChars(code.toInt())) else m.value
+        }
+        val named = NAMED_ENTITIES.entries.fold(unescaped) { acc, (name, value) ->
+            acc.replace("&$name;", value)
+        }
+        return named.replace(Regex("\\s+"), " ").trim()
     }
 
     private fun parseAlert(r: Reader, entityId: String): RtAlert {
+        // Field numbers follow transit_realtime.proto: 1 active_period (repeated),
+        // 5 informed_entity (repeated), 6 cause, 7 effect, 8 url, 10 header_text,
+        // 11 description_text, 14 severity.
         var header = ""
         var description = ""
         var cause = 0
@@ -312,10 +397,10 @@ object GtfsRt {
         val routes = ArrayList<String>(4)
         val stops = ArrayList<String>(4)
 
-        r.next { f, w, rr ->
+        r.each { f, w, rr ->
             when {
                 f == 1 && w == WIRE_LEN -> {
-                    rr.readBytes().next { tf, tw, tr ->
+                    rr.readBytes().each { tf, tw, tr ->
                         when {
                             tf == 1 && tw == WIRE_VARINT -> { start = tr.readVarint(); true }
                             tf == 2 && tw == WIRE_VARINT -> { end = tr.readVarint(); true }
@@ -325,11 +410,11 @@ object GtfsRt {
                     true
                 }
                 f == 5 && w == WIRE_LEN -> {
-                    rr.readBytes().next { ef, ew, er ->
+                    rr.readBytes().each { ef, ew, er ->
                         when {
+                            // EntitySelector: 2 route_id, 5 stop_id
                             ef == 2 && ew == WIRE_LEN -> { routes.add(er.readString()); true }
-                            ef == 4 && ew == WIRE_LEN -> { er.skip(ew); true }
-                            ef == 6 && ew == WIRE_LEN -> { stops.add(er.readString()); true }
+                            ef == 5 && ew == WIRE_LEN -> { stops.add(er.readString()); true }
                             else -> { er.skip(ew); true }
                         }
                     }
@@ -337,9 +422,15 @@ object GtfsRt {
                 }
                 f == 6 && w == WIRE_VARINT -> { cause = rr.readInt(); true }
                 f == 7 && w == WIRE_VARINT -> { effect = rr.readInt(); true }
-                f == 8 && w == WIRE_LEN -> { url = rr.readString(); true }
-                f == 10 && w == WIRE_LEN -> { header = parseTranslated(rr.readBytes()); true }
-                f == 11 && w == WIRE_LEN -> { description = parseTranslated(rr.readBytes()); true }
+                f == 8 && w == WIRE_LEN -> {
+                    val sub = rr.readBytes()
+                    val raw = sub.rawRemaining()
+                    val text = parseTranslated(sub)
+                    url = text.ifBlank { String(raw, Charsets.UTF_8).takeIf { it.isNotBlank() } }
+                    true
+                }
+                f == 10 && w == WIRE_LEN -> { header = parseTranslated(rr.readBytes()).toUserText(); true }
+                f == 11 && w == WIRE_LEN -> { description = parseTranslated(rr.readBytes()).toUserText(); true }
                 f == 14 && w == WIRE_VARINT -> { severity = rr.readInt(); true }
                 else -> { rr.skip(w); true }
             }

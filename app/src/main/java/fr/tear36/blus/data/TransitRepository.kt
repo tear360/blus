@@ -227,18 +227,36 @@ class TransitRepository(context: Context) {
         return true
     }
 
-    private fun GtfsRt.RtAlert.toTrafficAlert() = TrafficAlert(
-        id = id,
-        header = header.ifBlank { description.take(80) }.ifBlank { "Information trafic" },
-        description = description,
-        severity = GtfsRt.severityLabel(severity),
-        cause = GtfsRt.causeLabel(cause),
-        effect = GtfsRt.effectLabel(effect),
-        lines = routes.map { it.substringAfterLast(':') },
-        url = url,
-        validFrom = start,
-        validUntil = end,
-    )
+    private fun GtfsRt.RtAlert.toTrafficAlert(): TrafficAlert {
+        val lineNames = routes.map { it.substringAfterLast(':') }.distinct()
+        // A third of the published alerts carry no header nor description: they only say
+        // which lines are affected. Build a readable title from those instead.
+        val fallback = buildString {
+            val topic = if (effect > 1 && effect != 10 && effect != 11) {
+                GtfsRt.effectLabel(effect)
+            } else {
+                GtfsRt.causeLabel(cause)
+            }
+            append(topic)
+            if (lineNames.isNotEmpty()) {
+                append(" — ")
+                append(lineNames.take(3).joinToString(", "))
+                if (lineNames.size > 3) append(" et ${lineNames.size - 3} autres")
+            }
+        }
+        return TrafficAlert(
+            id = id,
+            header = header.ifBlank { description.take(80) }.ifBlank { fallback },
+            description = description,
+            severity = GtfsRt.severityLabel(severity),
+            cause = GtfsRt.causeLabel(cause),
+            effect = GtfsRt.effectLabel(effect),
+            lines = lineNames,
+            url = url,
+            validFrom = start,
+            validUntil = end,
+        )
+    }
 
     // ---------- Vehicle interpolation ----------
 

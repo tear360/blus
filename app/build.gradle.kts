@@ -26,6 +26,9 @@ val releaseStorePassword = signingValue("BLUS_KEYSTORE_PASSWORD", "storePassword
 val releaseKeyAlias = signingValue("BLUS_KEY_ALIAS", "keyAlias")
 val releaseKeyPassword = signingValue("BLUS_KEY_PASSWORD", "keyPassword")
 
+/** Fallback version for local builds; CI overrides it with the tag it is releasing. */
+val defaultVersionName = "1.0.1"
+
 /**
  * Keystore paths come from env vars / CI, which are usually relative to the repository
  * root rather than to the :app module, so try both.
@@ -50,7 +53,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = versionCodeFromTag()
-        versionName = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "1.0.0"
+        versionName = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() } ?: defaultVersionName
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -90,6 +93,10 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 
     packaging {
@@ -138,11 +145,13 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    testImplementation("junit:junit:4.13.2")
 }
 
 /** versionCode must increase on every release, so derive it from the tag when present. */
 fun versionCodeFromTag(): Int {
-    val tag = System.getenv("VERSION_NAME") ?: return 1
+    val tag = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() } ?: defaultVersionName
     val core = tag.substringBefore('-')
     val parts = core.split('.').mapNotNull { it.toIntOrNull() }
     if (parts.isEmpty()) return 1

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import androidx.core.content.FileProvider
 import java.io.File
@@ -50,7 +51,20 @@ class ApkInstaller : BroadcastReceiver() {
                 putExtra(EXTRA_APK_PATH, file.absolutePath)
             }
 
-        /** Minimum Android version that installs APKs from a FileProvider URI. */
+        /**
+         * Since Android 8 the user must grant "install unknown apps" per application.
+         * Returns an intent to that settings screen when the grant is missing.
+         */
+        fun requestUnknownSourcesPermission(context: Context): Intent? {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+            val allowed = context.packageManager.canRequestPackageInstalls()
+            if (allowed) return null
+            return Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                data = Uri.parse("package:${context.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+        }
+
         val isSupportedPlatform: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N
     }
 }

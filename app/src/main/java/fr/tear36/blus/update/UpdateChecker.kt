@@ -2,6 +2,7 @@ package fr.tear36.blus.update
 
 import android.content.Context
 import android.util.Log
+import fr.tear36.blus.BuildConfig
 import fr.tear36.blus.data.BuildInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -67,7 +68,7 @@ class UpdateChecker(private val context: Context) {
                 .url(BuildInfo.RELEASES_API)
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28")
-                .header("User-Agent", "Blus-${BuildInfo.VERSION_NAME}")
+                .header("User-Agent", "Blus-${BuildConfig.VERSION_NAME}")
                 .build()
 
             http.newCall(request).execute().use { response ->
@@ -95,7 +96,7 @@ class UpdateChecker(private val context: Context) {
                     ?: return@withContext UpdateResult.Failed("aucun APK dans la release")
 
                 val remoteVersion = release.tagName.removePrefix("v")
-                if (compareVersions(remoteVersion, BuildInfo.VERSION_NAME) <= 0) {
+                if (compareVersions(remoteVersion, BuildConfig.VERSION_NAME) <= 0) {
                     return@withContext UpdateResult.UpToDate
                 }
 
@@ -125,7 +126,7 @@ class UpdateChecker(private val context: Context) {
                 val request = Request.Builder()
                     .url(update.apkUrl)
                     .header("Accept", "application/vnd.android.package-archive")
-                    .header("User-Agent", "Blus-${BuildInfo.VERSION_NAME}")
+                    .header("User-Agent", "Blus-${BuildConfig.VERSION_NAME}")
                     .build()
 
                 http.newCall(request).execute().use { response ->

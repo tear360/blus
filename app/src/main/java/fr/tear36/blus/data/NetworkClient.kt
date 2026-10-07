@@ -1,5 +1,6 @@
 package fr.tear36.blus.data
 
+import fr.tear36.blus.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -23,7 +24,7 @@ class NetworkClient(private val cacheDir: File) {
         .retryOnConnectionFailure(true)
         .build()
 
-    private val userAgent = "Blus/${BuildInfo.VERSION_NAME} (Android; open-data transit app)"
+    private val userAgent = "Blus/${BuildConfig.VERSION_NAME} (Android; open-data transit app)"
 
     // GTFS static bundle — ~27 MB, refreshed every few days.
     private val gtfsUrl = "https://data.nantesmetropole.fr/explore/dataset/" +
@@ -98,7 +99,6 @@ class NetworkClient(private val cacheDir: File) {
 }
 
 object BuildInfo {
-    const val VERSION_NAME = "1.0.0"
     const val REPO = "tear360/blus"
     const val RELEASES_API = "https://api.github.com/repos/$REPO/releases/latest"
 }

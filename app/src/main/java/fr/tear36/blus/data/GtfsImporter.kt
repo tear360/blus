@@ -1,4 +1,4 @@
-﻿package fr.tear36.blus.data
+package fr.tear36.blus.data
 
 import android.database.sqlite.SQLiteDatabase
 import kotlinx.coroutines.Dispatchers
@@ -95,7 +95,7 @@ object GtfsImporter {
         } finally {
             db.endTransaction()
         }
-        onProgress(Progress("arrÃªts", rows, TOTAL_ROWS))
+        onProgress(Progress("arrêts", rows, TOTAL_ROWS))
         return rows
     }
 
@@ -190,7 +190,7 @@ object GtfsImporter {
         } finally {
             db.endTransaction()
         }
-        onProgress(Progress("tracÃ©s", rows, TOTAL_ROWS))
+        onProgress(Progress("tracés", rows, TOTAL_ROWS))
         return rows
     }
 
@@ -293,11 +293,9 @@ object GtfsImporter {
 
     // ---------- CSV ----------
 
-    private const val MAX_FIELDS = 32
-
     /**
      * Streams every record of [zis] (header skipped) into [consumer].
-     * The field array is reused across rows, so [consumer] must not retain it.
+     * The field array is reused between rows, so [consumer] must not retain it.
      */
     private suspend inline fun eachRow(
         zis: ZipInputStream,
@@ -306,73 +304,17 @@ object GtfsImporter {
         val reader = BufferedReader(InputStreamReader(zis, StandardCharsets.UTF_8), 1 shl 16)
         if (reader.readLine() == null) return // empty entry
 
-        val fields = Array(MAX_FIELDS) { "" }
+        val fields = Array(GtfsCsv.DEFAULT_MAX_FIELDS) { "" }
         val line = StringBuilder(256)
-        val unquoted = StringBuilder(128)
         var counter = 0L
 
-        while (true) {
-            if (!readCsvRecord(reader, line)) break
-            if (line.isEmpty()) continue
-
-            val len = line.length
-            var count = 0
-            var i = 0
-            while (i < len && count < MAX_FIELDS) {
-                if (line[i] == '"') {
-                    i++
-                    unquoted.setLength(0)
-                    while (i < len) {
-                        val c = line[i]
-                        if (c == '"') {
-                            if (i + 1 < len && line[i + 1] == '"') {
-                                unquoted.append('"'); i += 2
-                            } else { i++; break }
-                        } else { unquoted.append(c); i++ }
-                    }
-                    while (i < len && line[i] != ',') i++
-                    fields[count++] = unquoted.toString()
-                } else {
-                    val start = i
-                    while (i < len && line[i] != ',') i++
-                    fields[count++] = line.substring(start, i)
-                }
-                if (i < len) i++ // skip the comma
+        while (GtfsCsv.readRecord(reader, line, fields) >= 0) {
+            if (line.isNotEmpty()) {
+                consumer(fields)
+                if (++counter % 50_000L == 0L) coroutineContext.ensureActive()
             }
-            while (count < MAX_FIELDS) fields[count++] = ""
-
-            consumer(fields)
-
-            if (++counter % 50_000L == 0L) coroutineContext.ensureActive()
         }
     }
 
-    /** Reads one CSV record into [out] (quoted newlines allowed). Returns false at EOF. */
-    private fun readCsvRecord(reader: BufferedReader, out: StringBuilder): Boolean {
-        out.setLength(0)
-        var c = reader.read()
-        if (c == -1) return false
-        var inQuotes = false
-        while (c != -1) {
-            val ch = c.toChar()
-            if (ch == '"') inQuotes = !inQuotes
-            if (ch == '\n' && !inQuotes) {
-                if (out.isNotEmpty() && out[out.length - 1] == '\r') out.deleteCharAt(out.length - 1)
-                if (out.isNotEmpty() && out[out.length - 1] == '\n') out.deleteCharAt(out.length - 1)
-                return true
-            }
-            out.append(ch)
-            c = reader.read()
-        }
-        if (out.isNotEmpty() && out[out.length - 1] == '\r') out.deleteCharAt(out.length - 1)
-        return true
-    }
-
-    fun gtfsTimeToSec(t: String): Int {
-        if (t.length < 8) return -1
-        val h = t.substring(0, 2).toIntOrNull() ?: return -1
-        val m = t.substring(3, 5).toIntOrNull() ?: return -1
-        val s = t.substring(6, 8).toIntOrNull() ?: return -1
-        return h * 3600 + m * 60 + s
-    }
+    fun gtfsTimeToSec(t: String): Int = GtfsCsv.timeToSec(t)
 }
