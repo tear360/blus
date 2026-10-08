@@ -8,13 +8,20 @@ import androidx.lifecycle.viewModelScope
 import fr.tear36.blus.data.FeedState
 import fr.tear36.blus.data.RealtimeSnapshot
 import fr.tear36.blus.data.Route
+import fr.tear36.blus.data.RouteVariant
+import fr.tear36.blus.data.ShapePoint
 import fr.tear36.blus.data.Stop
 import fr.tear36.blus.data.TransitRepository
 import fr.tear36.blus.data.TransitRepository.Departure
+import fr.tear36.blus.data.routeShapes
+import fr.tear36.blus.data.routeVariants
 import fr.tear36.blus.data.searchStops
 import fr.tear36.blus.data.routesAtStop
 import fr.tear36.blus.data.stationsNear
+import fr.tear36.blus.data.stopsById
 import fr.tear36.blus.data.toStop
+import fr.tear36.blus.data.tripStopIds
+import fr.tear36.blus.service.ApproachService
 import fr.tear36.blus.update.AvailableUpdate
 import fr.tear36.blus.update.UpdateChecker
 import fr.tear36.blus.update.UpdateResult
@@ -54,6 +61,10 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
     val realtime = MutableStateFlow(RealtimeSnapshot(emptyList(), emptyList(), 0, 0, 0))
     val location = MutableStateFlow<LatLon?>(null)
     val routes = MutableStateFlow<Map<String, Route>>(emptyMap())
+    /** routeId -> shape, used to draw the coloured lines on the map. */
+    val mapShapes = MutableStateFlow<Map<String, List<ShapePoint>>>(emptyMap())
+    /** `null` means "every line"; an empty set means "none". */
+    val visibleRouteIds = MutableStateFlow<Set<String>?>(null)
     val selectedStopId = MutableStateFlow<String?>(null)
     val favorites = MutableStateFlow<Set<String>>(loadFavorites())
     val updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
@@ -66,6 +77,7 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
     val repoRef: TransitRepository get() = repo
 
     init {
+        syncApproachService()
         viewModelScope.launch {
             repo.bootstrap(onState = { feedState.value = it })
             loadRoutes()
@@ -77,6 +89,13 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadRoutes() {
         viewModelScope.launch(Dispatchers.IO) {
             routes.value = repo.routes()
+            val shapes = repo.database.routeShapes()
+            mapShapes.value = shapes
+            if (visibleRouteIds.value == null) {
+                val stored = BlusApp.prefs(getApplication())
+                    .getStringSet(KEY_VISIBLE_LINES, null)
+                visibleRouteIds.value = stored?.let { HashSet(it) } ?: shapes.keys
+            }
         }
     }
 
@@ -190,6 +209,32 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------- Carte : lignes affichees ----------
+
+    fun toggleRouteVisible(routeId: String) {
+        val current = visibleRouteIds.value ?: mapShapes.value.keys
+        val next = current.toMutableSet().apply { if (!add(routeId)) remove(routeId) }
+        visibleRouteIds.value = next
+        BlusApp.prefs(getApplication()).edit().putStringSet(KEY_VISIBLE_LINES, next).apply()
+    }
+
+    fun setAllRoutesVisible(all: Boolean) {
+        val next: Set<String> = if (all) mapShapes.value.keys else emptySet()
+        visibleRouteIds.value = next
+        BlusApp.prefs(getApplication()).edit().putStringSet(KEY_VISIBLE_LINES, next).apply()
+    }
+
+    suspend fun routeVariants(routeId: String): List<RouteVariant> =
+        withContext(Dispatchers.IO) { repo.database.routeVariants(routeId) }
+
+    /** Stops of one direction of a route, in driving order. */
+    suspend fun routeDirectionStops(routeId: String, variant: RouteVariant): List<Stop> =
+        withContext(Dispatchers.IO) {
+            val ids = repo.database.tripStopIds(variant.tripId)
+            val byId = repo.database.stopsById(ids)
+            ids.mapNotNull { byId[it] }
+        }
+
     // ---------- Favorites ----------
 
     private fun loadFavorites(): Set<String> =
@@ -200,6 +245,17 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
         if (!current.add(stopId)) current.remove(stopId)
         BlusApp.prefs(getApplication()).edit().putStringSet(KEY_FAVORITES, current).apply()
         favorites.value = current
+        syncApproachService()
+    }
+
+    /** The background watcher only runs while there is something to watch. */
+    private fun syncApproachService() {
+        val app = getApplication<Application>()
+        if (favorites.value.isNotEmpty()) {
+            ApproachService.start(app)
+        } else {
+            ApproachService.stop(app)
+        }
     }
 
     suspend fun favoriteStops(): List<Stop> = withContext(Dispatchers.IO) {
@@ -261,6 +317,7 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
 
     companion object {
         private const val KEY_FAVORITES = "favorite_stops"
+        private const val KEY_VISIBLE_LINES = "visible_lines"
         private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
         private const val KEY_UPDATE_INTERVAL = "update_check_interval_ms"
     }

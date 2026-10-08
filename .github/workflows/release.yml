@@ -103,6 +103,32 @@ jobs:
         run: |
           $ANDROID_HOME/build-tools/35.0.0/apksigner verify --verbose "${{ steps.apk.outputs.path }}"
 
+      - name: Build release notes
+        id: notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          {
+            echo "body<<BLUS_EOF"
+            echo "## Blus $TAG"
+            echo ""
+            if [ -f "release-notes/$TAG.md" ]; then
+              cat "release-notes/$TAG.md"
+              echo ""
+            fi
+            echo "**Installer** : télécharger le fichier \`.apk\` ci-dessous et l'ouvrir."
+            echo "Android demandera d'autoriser l'installation depuis cette source."
+            echo ""
+            echo "Les mises à jour futures sont proposées directement dans l'application"
+            echo "(Réglages → Mise à jour)."
+            echo ""
+            echo "---"
+            echo "Données : Nantes Métropole (GTFS, GTFS-RT) via"
+            echo "transport.data.gouv.fr — Licence Ouverte 2.0."
+            echo "Carte : © contributeurs OpenStreetMap (ODbL)."
+            echo "BLUS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -111,21 +137,7 @@ jobs:
           draft: false
           prerelease: false
           files: ${{ steps.apk.outputs.path }}
-          body: |
-            ## Blus ${{ steps.tag.outputs.tag }}
-
-            Application Android pour suivre le réseau Naolib en temps réel.
-
-            **Installer** : télécharger le fichier `.apk` ci-dessous et l'ouvrir.
-            Android demandera d'autoriser l'installation depuis cette source.
-
-            Les mises à jour futures sont proposées directement dans l'application
-            (Réglages → Mise à jour).
-
-            ---
-            Données : Nantes Métropole (GTFS, GTFS-RT) via
-            transport.data.gouv.fr — Licence Ouverte 2.0.
-            Carte : © contributeurs OpenStreetMap (ODbL).
+          body: ${{ steps.notes.outputs.body }}
 
       - name: Clean keystore
         if: always()

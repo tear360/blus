@@ -2,6 +2,7 @@ package fr.tear36.blus
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,6 +22,9 @@ class MainActivity : ComponentActivity() {
             if (grants.values.any { it }) requestPosition()
         }
 
+    private val requestNotifications =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* best effort */ }
+
     private var pendingVm: BlusViewModel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -36,6 +40,11 @@ class MainActivity : ComponentActivity() {
                 ) == PackageManager.PERMISSION_GRANTED
 
                 LaunchedEffect(Unit) {
+                    // Favourite-stop alerts are useless without a notification channel the
+                    // user is allowed to post to.
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        requestNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
                     if (granted) requestPosition() else askLocationPermission()
                 }
 

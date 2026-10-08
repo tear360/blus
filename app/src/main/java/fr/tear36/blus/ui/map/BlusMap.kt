@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color as AndroidColor
 import android.graphics.Paint
 import android.graphics.Point
+import android.graphics.RectF
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import androidx.compose.foundation.background
@@ -17,13 +18,10 @@ import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -51,10 +49,15 @@ import org.osmdroid.views.overlay.Polyline
 /** Nantes centre — used before the first location fix. */
 val NANTES_CENTER = GeoPoint(47.2184, -1.5536)
 
+/** Stop names are only worth drawing once the stops stop overlapping. */
+private const val LABEL_MIN_ZOOM = 15.0
+
 data class MapData(
     val vehicles: List<Vehicle>,
     val stops: List<Stop>,
     val routes: Map<String, Route>,
+    val shapes: Map<String, List<ShapePoint>>,
+    val visibleRouteIds: Set<String>,
     val selectedStopId: String?,
     val center: LatLon?,
     val onStopClick: (Stop) -> Unit,
@@ -62,9 +65,9 @@ data class MapData(
 )
 
 /**
- * OpenStreetMap map showing nearby stops and live vehicles.
+ * OpenStreetMap map showing the line shapes, nearby stops and live vehicles.
  *
- * Stops are drawn in one canvas pass (a Marker per stop would choke the view);
+ * Stops and shapes are drawn in canvas passes (a Marker per stop would choke the view);
  * vehicles get real [Marker]s because there are few and they need hit-testing.
  */
 @Composable
@@ -89,7 +92,8 @@ fun BlusMap(
         }
     }
 
-    val stopOverlay = remember { StopOverlay(data.onStopClick) }
+    val lineManager = remember { LineOverlay(mapView) }
+    val stopOverlay = remember { StopOverlay(mapView, data.onStopClick) }
     val markerManager = remember { VehicleMarkerManager(mapView, data.onVehicleClick) }
 
     DisposableEffect(mapView) {
@@ -97,6 +101,7 @@ fun BlusMap(
         mapView.onResume()
         onDispose {
             mapView.overlays.remove(stopOverlay)
+            lineManager.clear()
             markerManager.clear()
             mapView.onPause()
         }
@@ -118,6 +123,9 @@ fun BlusMap(
     LaunchedEffect(data.vehicles, data.routes) {
         markerManager.sync(data.vehicles, data.routes)
     }
+    LaunchedEffect(data.shapes, data.visibleRouteIds, data.routes) {
+        lineManager.sync(data.routes, data.shapes, data.visibleRouteIds)
+    }
     LaunchedEffect(data.stops, data.selectedStopId) {
         stopOverlay.update(data.stops, data.selectedStopId)
         mapView.invalidate()
@@ -133,26 +141,10 @@ fun BlusMap(
             update = { it.invalidate() },
         )
 
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(12.dp),
-            shape = MaterialTheme.shapes.small,
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-        ) {
-            Text(
-                text = "${data.stops.size} arrêts · " +
-                    "${data.vehicles.count { it.lat != null }} véhicules",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            )
-        }
-
         IconButton(
             onClick = onRecenter,
             modifier = Modifier
-                .align(Alignment.BottomEnd)
+                .align(androidx.compose.ui.Alignment.BottomEnd)
                 .padding(16.dp)
                 .background(
                     MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
@@ -169,10 +161,54 @@ fun BlusMap(
 }
 
 // ---------------------------------------------------------------------------
+// Line shapes: one Polyline per visible route
+// ---------------------------------------------------------------------------
+
+private class LineOverlay(private val mapView: MapView) {
+
+    private val polylines = HashMap<String, Polyline>()
+
+    fun sync(
+        routes: Map<String, Route>,
+        shapes: Map<String, List<ShapePoint>>,
+        visible: Set<String>,
+    ) {
+        val wanted = shapes.keys.filter { it in visible }
+        var changed = false
+        polylines.keys.filter { it !in wanted }.forEach { key ->
+            mapView.overlays.remove(polylines.remove(key))
+            changed = true
+        }
+        for (routeId in wanted) {
+            if (polylines.containsKey(routeId)) continue
+            val color = parseGtfsColor(routes[routeId]?.color, Color(0xFF8A94A6)).toArgb()
+            val line = shapePolyline(shapes[routeId].orEmpty(), color, LINE_WIDTH)
+            line.outlinePaint.alpha = 215
+            // Insert at the bottom so stops and vehicles keep drawing on top.
+            mapView.overlays.add(0, line)
+            polylines[routeId] = line
+            changed = true
+        }
+        if (changed) mapView.invalidate()
+    }
+
+    fun clear() {
+        polylines.values.forEach { mapView.overlays.remove(it) }
+        polylines.clear()
+    }
+
+    private companion object {
+        /** Overlay units are already density scaled, so this is ~4.5 dp on screen. */
+        const val LINE_WIDTH = 4.5f
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Stops: single canvas pass
 // ---------------------------------------------------------------------------
 
 private class StopOverlay(
+    private val mapView: MapView,
     private val onClick: (Stop) -> Unit,
 ) : Overlay() {
 
@@ -181,6 +217,22 @@ private class StopOverlay(
 
     private val halo = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val labelHalo = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 3.5f
+        strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
+        textAlign = Paint.Align.LEFT
+        textSize = LABEL_TEXT_SIZE
+        color = AndroidColor.WHITE
+    }
+    private val labelFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        textAlign = Paint.Align.LEFT
+        textSize = LABEL_TEXT_SIZE
+        color = AndroidColor.rgb(28, 28, 28)
+    }
+    private val placed = ArrayList<RectF>(128)
 
     fun update(stops: List<Stop>, selectedId: String?) {
         this.stops = stops
@@ -190,22 +242,57 @@ private class StopOverlay(
     override fun draw(canvas: Canvas, projection: Projection) {
         if (stops.isEmpty()) return
         val p = Point()
-        halo.color = AndroidColor.argb(190, 255, 255, 255)
-        halo.strokeWidth = 4.5f
+
+        halo.color = AndroidColor.argb(210, 255, 255, 255)
+        halo.strokeWidth = 1.5f
         for (s in stops) {
             projection.toPixels(GeoPoint(s.lat, s.lon), p)
-            canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 5f, halo)
+            canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 3.2f, halo)
         }
+
+        dot.color = AndroidColor.argb(235, 0, 122, 69)
+        for (s in stops) {
+            if (s.id == selectedId) continue
+            projection.toPixels(GeoPoint(s.lat, s.lon), p)
+            canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 2.4f, dot)
+        }
+
+        val selected = stops.firstOrNull { it.id == selectedId }
+        if (selected != null) {
+            projection.toPixels(GeoPoint(selected.lat, selected.lon), p)
+            halo.color = AndroidColor.argb(240, 255, 255, 255)
+            halo.strokeWidth = 2f
+            canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 6f, halo)
+            dot.color = AndroidColor.rgb(20, 20, 20)
+            canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 3.4f, dot)
+        }
+
+        if (mapView.zoomLevelDouble < LABEL_MIN_ZOOM) return
+        placed.clear()
         for (s in stops) {
             projection.toPixels(GeoPoint(s.lat, s.lon), p)
-            val selected = s.id == selectedId
-            dot.color = if (selected) AndroidColor.WHITE else AndroidColor.argb(240, 0, 122, 69)
-            canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), if (selected) 7f else 4.5f, dot)
+            val x = p.x + 5f
+            val y = p.y - 4f
+            val width = labelFill.measureText(s.name)
+            val box = RectF(x - 3f, y - labelFill.textSize, x + width + 3f, y + 4f)
+            var clash = false
+            for (other in placed) {
+                if (RectF.intersects(other, box)) { clash = true; break }
+            }
+            if (clash) continue
+            placed.add(box)
+            canvas.drawText(s.name, x, y, labelHalo)
+            canvas.drawText(s.name, x, y, labelFill)
         }
     }
 
+    private companion object {
+        /** Overlay units are density scaled, so this renders as 11 sp on screen. */
+        const val LABEL_TEXT_SIZE = 11f
+    }
+
     override fun onSingleTapConfirmed(e: android.view.MotionEvent, mapView: MapView): Boolean {
-        val tolerance = 56f
+        val tolerance = 48f
         var best: Stop? = null
         var bestDist = Float.MAX_VALUE
         for (s in stops) {

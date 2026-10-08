@@ -30,7 +30,7 @@ val releaseKeyAlias = signingValue("BLUS_KEY_ALIAS", "keyAlias")
 val releaseKeyPassword = signingValue("BLUS_KEY_PASSWORD", "keyPassword")
 
 /** Fallback version for local builds; CI overrides it with the tag it is releasing. */
-val defaultVersionName = "1.0.3"
+val defaultVersionName = "1.0.4"
 
 /**
  * Keystore paths come from env vars / CI, which are usually relative to the repository

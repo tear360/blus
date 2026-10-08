@@ -292,23 +292,25 @@ data class ScheduledCall(
     val departureSec: Int,
 )
 
-/** Trips serving a quay on one of the given service days, soonest first. */
+/** Trips serving one of the given quays on one of the given service days, soonest first. */
 fun SQLiteDatabase.scheduledCalls(
-    stopId: String,
+    stopIds: Collection<String>,
     serviceIds: Collection<String>,
     fromSec: Int,
     maxResults: Int,
 ): List<ScheduledCall> {
-    if (serviceIds.isEmpty()) return emptyList()
-    val placeholders = serviceIds.joinToString(",") { "?" }
+    if (serviceIds.isEmpty() || stopIds.isEmpty()) return emptyList()
+    val stopPh = stopIds.joinToString(",") { "?" }
+    val servicePh = serviceIds.joinToString(",") { "?" }
     val sql = """
         SELECT st.trip_id, t.route_id, t.headsign, t.direction_id, st.seq, st.arrival, st.departure
         FROM stop_times st
         JOIN trips t ON t.id = st.trip_id
-        WHERE st.stop_id = ? AND t.service_id IN ($placeholders) AND st.arrival >= ?
+        WHERE st.stop_id IN ($stopPh) AND t.service_id IN ($servicePh) AND st.arrival >= ?
         ORDER BY st.arrival LIMIT ?
     """.trimIndent()
-    val args = arrayOf(stopId) + serviceIds.toTypedArray() + arrayOf(fromSec.toString(), maxResults.toString())
+    val args = stopIds.toTypedArray() + serviceIds.toTypedArray() +
+        arrayOf(fromSec.toString(), maxResults.toString())
     val out = ArrayList<ScheduledCall>(maxResults)
     rawQuery(sql, args).use { c ->
         while (c.moveToNext()) {
@@ -365,6 +367,19 @@ fun SQLiteDatabase.tripStopIds(tripId: String): List<String> {
     return out
 }
 
+/**
+ * `stop_times` is keyed on quays, while the map and the nearby list work with stations
+ * (StopPlace). Resolving a station to its quays is what makes departures show up at all.
+ */
+fun SQLiteDatabase.quayIdsFor(stopId: String): List<String> {
+    val quays = ArrayList<String>(8)
+    rawQuery(
+        "SELECT id FROM stops WHERE parent_station = ?",
+        arrayOf(stopId),
+    ).use { c -> while (c.moveToNext()) quays.add(c.getString(0)) }
+    return if (quays.isEmpty()) listOf(stopId) else quays
+}
+
 fun SQLiteDatabase.shape(shapeId: String): List<ShapePoint> {
     val out = ArrayList<ShapePoint>(128)
     rawQuery(
@@ -375,12 +390,83 @@ fun SQLiteDatabase.shape(shapeId: String): List<ShapePoint> {
 }
 
 /** GTFS route ids serving a stop, used to colour stops on the map. */
-fun SQLiteDatabase.routesAtStop(stopId: String): List<String> {
-    val out = ArrayList<String>(8)
+fun SQLiteDatabase.routesAtStop(stopId: String): List<String> =
+    routesAtStops(quayIdsFor(stopId))
+
+fun SQLiteDatabase.routesAtStops(stopIds: Collection<String>): List<String> {
+    if (stopIds.isEmpty()) return emptyList()
+    val out = LinkedHashSet<String>(16)
+    stopIds.chunked(400) { chunk ->
+        val placeholders = chunk.joinToString(",") { "?" }
+        rawQuery(
+            "SELECT DISTINCT t.route_id FROM stop_times st JOIN trips t ON t.id = st.trip_id WHERE st.stop_id IN ($placeholders) LIMIT 80",
+            chunk.toTypedArray(),
+        ).use { c -> while (c.moveToNext()) out.add(c.getString(0)) }
+    }
+    return out.toList()
+}
+
+/**
+ * One representative shape per route, used to draw the lines on the map.
+ * The Naolib bundle only carries ~8k shape points, so the whole network is cheap enough
+ * to keep in memory; a single direction is enough since both share the same geometry.
+ */
+fun SQLiteDatabase.routeShapes(): Map<String, List<ShapePoint>> {
+    val shapeByRoute = LinkedHashMap<String, String>(128)
     rawQuery(
-        "SELECT DISTINCT t.route_id FROM stop_times st JOIN trips t ON t.id = st.trip_id WHERE st.stop_id = ? LIMIT 40",
-        arrayOf(stopId),
-    ).use { c -> while (c.moveToNext()) out.add(c.getString(0)) }
+        """
+        SELECT route_id, shape_id FROM trips
+        WHERE shape_id IS NOT NULL AND shape_id <> ''
+        GROUP BY route_id, direction_id
+        """.trimIndent(),
+        null,
+    ).use { c ->
+        while (c.moveToNext()) {
+            val routeId = c.getString(0)
+            if (!shapeByRoute.containsKey(routeId)) shapeByRoute[routeId] = c.getString(1)
+        }
+    }
+    val out = HashMap<String, List<ShapePoint>>(shapeByRoute.size)
+    for ((routeId, shapeId) in shapeByRoute) {
+        val points = shape(shapeId)
+        if (points.size >= 2) out[routeId] = points
+    }
+    return out
+}
+
+/** One trip per direction of a route — the canonical itinerary used to list its stops. */
+data class RouteVariant(val directionId: Int, val tripId: String, val headsign: String)
+
+fun SQLiteDatabase.routeVariants(routeId: String): List<RouteVariant> {
+    val out = ArrayList<RouteVariant>(2)
+    rawQuery(
+        "SELECT direction_id, id, headsign FROM trips WHERE route_id = ? GROUP BY direction_id",
+        arrayOf(routeId),
+    ).use { c ->
+        while (c.moveToNext()) {
+            out.add(
+                RouteVariant(
+                    directionId = c.getInt(0),
+                    tripId = c.getString(1),
+                    headsign = c.getString(2).orEmpty(),
+                ),
+            )
+        }
+    }
+    return out.sortedBy { it.directionId }
+}
+
+fun SQLiteDatabase.stopsById(ids: Collection<String>): Map<String, Stop> {
+    if (ids.isEmpty()) return emptyMap()
+    val wanted = ids.distinct()
+    val out = HashMap<String, Stop>(wanted.size)
+    wanted.chunked(500) { chunk ->
+        val placeholders = chunk.joinToString(",") { "?" }
+        rawQuery(
+            "SELECT id, name, lat, lon, location_type, parent_station, wheelchair FROM stops WHERE id IN ($placeholders)",
+            chunk.toTypedArray(),
+        ).use { c -> while (c.moveToNext()) { val s = c.toStop(); out[s.id] = s } }
+    }
     return out
 }
 

@@ -442,14 +442,16 @@ class TransitRepository(context: Context) {
     )
 
     /**
-     * Next departures at a stop (a quay or a station): live ones first, then scheduled.
+     * Next departures at a stop (a station or one of its quays): live ones first, then scheduled.
      */
     fun departures(stopId: String, snapshot: RealtimeSnapshot?, max: Int = 12): List<Departure> {
         val now = System.currentTimeMillis()
         val out = ArrayList<Departure>(max)
+        val quays = database.quayIdsFor(stopId)
+        val quaySet = HashSet(quays)
 
         snapshot?.vehicles?.forEach { v ->
-            if (v.nextStopId == stopId && v.nextArrivalEpoch != null && v.nextArrivalEpoch > now - 60_000) {
+            if (v.nextStopId in quaySet && v.nextArrivalEpoch != null && v.nextArrivalEpoch > now - 60_000) {
                 out.add(
                     Departure(
                         routeId = v.routeId,
@@ -469,7 +471,7 @@ class TransitRepository(context: Context) {
         val known = HashSet<String>()
         out.forEach { known.add(it.tripId) }
 
-        database.scheduledCalls(stopId, serviceIds, fromSec, max * 4).forEach { call ->
+        database.scheduledCalls(quays, serviceIds, fromSec, max * 4).forEach { call ->
             if (call.tripId in known) return@forEach
             val epoch = TimeUtils.localMidnightPlus(call.arrivalSec, now)
             if (epoch < now - 60_000) return@forEach
@@ -493,8 +495,9 @@ class TransitRepository(context: Context) {
     /** Real-time departures only (fast path, no schedule lookup). */
     fun liveDepartures(stopId: String, snapshot: RealtimeSnapshot?, max: Int = 12): List<Departure> {
         val now = System.currentTimeMillis()
+        val quaySet = HashSet(database.quayIdsFor(stopId))
         return snapshot?.vehicles.orEmpty()
-            .filter { it.nextStopId == stopId && (it.nextArrivalEpoch ?: 0L) > now - 60_000 }
+            .filter { it.nextStopId in quaySet && (it.nextArrivalEpoch ?: 0L) > now - 60_000 }
             .sortedBy { it.nextArrivalEpoch }
             .take(max)
             .map {

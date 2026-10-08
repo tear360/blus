@@ -6,6 +6,7 @@
 -keep class fr.tear36.blus.BlusApp { *; }
 -keep class fr.tear36.blus.MainActivity { *; }
 -keep class fr.tear36.blus.update.ApkInstaller { *; }
+-keep class fr.tear36.blus.service.ApproachService { *; }
 
 # kotlinx.serialization generated serializers.
 -keepattributes *Annotation*, InnerClasses
