@@ -16,8 +16,12 @@ class GtfsDb(context: Context) :
 
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
-        db.execSQL("PRAGMA journal_mode=WAL")
-        db.execSQL("PRAGMA synchronous=NORMAL")
+        // `PRAGMA journal_mode` answers with a row, and a statement that returns rows
+        // cannot go through execSQL — Android answers "Queries can be performed using
+        // SQLiteDatabase query or rawQuery methods only", which used to kill the app
+        // as soon as it opened the database. Asking for it as a query keeps both PRAGMAs.
+        db.rawQuery("PRAGMA journal_mode=WAL", null).use { it.moveToFirst() }
+        db.rawQuery("PRAGMA synchronous=NORMAL", null).use { it.moveToFirst() }
     }
 
     override fun onCreate(db: SQLiteDatabase) {

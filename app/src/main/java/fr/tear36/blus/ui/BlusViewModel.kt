@@ -19,6 +19,7 @@ import fr.tear36.blus.update.AvailableUpdate
 import fr.tear36.blus.update.UpdateChecker
 import fr.tear36.blus.update.UpdateResult
 import fr.tear36.blus.BlusApp
+import fr.tear36.blus.ui.map.NANTES_CENTER
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -105,6 +106,11 @@ class BlusViewModel(app: Application) : AndroidViewModel(app) {
     @SuppressLint("MissingPermission")
     fun bindLocation(fused: com.google.android.gms.location.FusedLocationProviderClient) {
         locationJob?.cancel()
+        // `lastLocation` stays null until *some* app has already obtained a fix, which
+        // never happens on a fresh install — fall back on Nantes so the map is never empty.
+        if (location.value == null) {
+            pushLocation(NANTES_CENTER.latitude, NANTES_CENTER.longitude)
+        }
         locationJob = viewModelScope.launch {
             try {
                 fused.lastLocation

@@ -102,7 +102,7 @@ class TransitRepository(context: Context) {
             true
         } catch (e: Exception) {
             Log.e(TAG, "GTFS bootstrap failed", e)
-            if (!hasNetwork()) onState(FeedState.Failed(e.message ?: "échec du téléchargement"))
+            onState(FeedState.Failed(e.message ?: "échec du téléchargement"))
             false
         }
     }

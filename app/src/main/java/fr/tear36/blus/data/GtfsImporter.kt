@@ -177,10 +177,12 @@ object GtfsImporter {
             stmt.use { st ->
                 eachRow(zis) { f ->
                     st.clearBindings()
+                    // shapes.txt is ordered shape_id, shape_pt_lat, shape_pt_lon,
+                    // shape_pt_sequence — the statement is (shape_id, seq, lat, lon).
                     st.bindString(1, f[0])
-                    st.bindLong(2, f[1].toLongOrNull() ?: 0L)
-                    st.bindDouble(3, f[2].toDoubleOrNull() ?: 0.0)
-                    st.bindDouble(4, f[3].toDoubleOrNull() ?: 0.0)
+                    st.bindLong(2, f[3].toLongOrNull() ?: 0L)
+                    st.bindDouble(3, f[1].toDoubleOrNull() ?: 0.0)
+                    st.bindDouble(4, f[2].toDoubleOrNull() ?: 0.0)
                     st.executeInsert()
                     s.shapePoints++
                     rows++
